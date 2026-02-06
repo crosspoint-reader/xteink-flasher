@@ -120,42 +120,50 @@ export default function Home() {
               device using <b>Save full flash</b> above.
             </p>
             <p>
-              <b>Flash English/Chinese firmware</b> will download the firmware,
+              <b>Flash to backup partition</b> will download the firmware,
               overwrite the backup partition with the new firmware, and swap
               over to using this partition (leaving your existing firmware as
-              the new backup). This is significantly faster than a full flash
-              write and will retain all your settings. If it goes wrong, it
-              should be fine to run again.
+              the new backup). This is fast and retains all settings, with the
+              option to swap back if needed. If it goes wrong, it should be fine
+              to run again.
+            </p>
+            <p>
+              For more advanced flashing options (like flashing to the current
+              partition), see the <b>Debug</b> page.
             </p>
           </Stack>
         </div>
         <Stack as="section">
-          <Button
-            variant="subtle"
-            onClick={actions.flashEnglishFirmware}
-            disabled={isRunning || !officialFirmwareVersions}
-            loading={!officialFirmwareVersions}
-          >
-            Flash English firmware ({officialFirmwareVersions?.en ?? '...'})
-          </Button>
-          <Button
-            variant="subtle"
-            onClick={actions.flashChineseFirmware}
-            disabled={isRunning || !officialFirmwareVersions}
-            loading={!officialFirmwareVersions}
-          >
-            Flash Chinese firmware ({officialFirmwareVersions?.ch ?? '...'})
-          </Button>
-          <Button
-            variant="subtle"
-            onClick={actions.flashCrossPointFirmware}
-            disabled={isRunning || !communityFirmwareVersions}
-            loading={!communityFirmwareVersions}
-          >
-            Flash CrossPoint firmware (
-            {communityFirmwareVersions?.crossPoint.version}) -{' '}
-            {communityFirmwareVersions?.crossPoint.releaseDate}
-          </Button>
+          <Stack direction="column" gap={2}>
+            <Button
+              variant="subtle"
+              onClick={actions.flashEnglishFirmwareToBackup}
+              disabled={isRunning || !officialFirmwareVersions}
+              loading={!officialFirmwareVersions}
+            >
+              Flash English firmware ({officialFirmwareVersions?.en ?? '...'})
+              to backup
+            </Button>
+            <Button
+              variant="subtle"
+              onClick={actions.flashChineseFirmwareToBackup}
+              disabled={isRunning || !officialFirmwareVersions}
+              loading={!officialFirmwareVersions}
+            >
+              Flash Chinese firmware ({officialFirmwareVersions?.ch ?? '...'})
+              to backup
+            </Button>
+            <Button
+              variant="subtle"
+              onClick={actions.flashCrossPointFirmwareToBackup}
+              disabled={isRunning || !communityFirmwareVersions}
+              loading={!communityFirmwareVersions}
+            >
+              Flash CrossPoint firmware (
+              {communityFirmwareVersions?.crossPoint.version}) -{' '}
+              {communityFirmwareVersions?.crossPoint.releaseDate} to backup
+            </Button>
+          </Stack>
           <Stack direction="row">
             <Flex grow={1}>
               <FileUpload ref={appPartitionFileInput} />
@@ -164,13 +172,13 @@ export default function Home() {
               variant="subtle"
               flexGrow={1}
               onClick={() =>
-                actions.flashCustomFirmware(() =>
+                actions.flashCustomFirmwareToBackup(() =>
                   appPartitionFileInput.current?.getFile(),
                 )
               }
               disabled={isRunning}
             >
-              Flash firmware from file
+              Flash firmware from file to backup
             </Button>
           </Stack>
           {process.env.NODE_ENV === 'development' && (

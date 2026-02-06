@@ -1,6 +1,6 @@
 'use client';
 
-import React, { ReactNode, useState } from 'react';
+import React, { ReactNode, useEffect, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -27,6 +27,11 @@ import HexSpan from '@/components/HexSpan';
 import HexViewer from '@/components/HexViewer';
 import { downloadData } from '@/utils/download';
 import { FirmwareInfo } from '@/utils/firmwareIdentifier';
+import FileUpload, { FileUploadHandle } from '@/components/FileUpload';
+import {
+  getOfficialFirmwareVersions,
+  getCommunityFirmwareRemoteData,
+} from '@/remote/firmwareFetcher';
 
 function OtadataDebug({ otaPartition }: { otaPartition: OtaPartition }) {
   const bootPartitionLabel = otaPartition.getCurrentBootPartitionLabel();
@@ -272,8 +277,24 @@ function FirmwareIdentificationDebug({
 }
 
 export default function Debug() {
-  const { debugActions, stepData, isRunning } = useEspOperations();
+  const { actions, debugActions, stepData, isRunning } = useEspOperations();
   const [debugOutputNode, setDebugOutputNode] = useState<ReactNode>(null);
+  const appPartitionFileInput = React.useRef<FileUploadHandle>(null);
+  const [officialFirmwareVersions, setOfficialFirmwareVersions] = useState<{
+    en: string;
+    ch: string;
+  } | null>(null);
+  const [communityFirmwareVersions, setCommunityFirmwareVersions] = useState<{
+    crossPoint: { version: string; releaseDate: string };
+  } | null>(null);
+
+  useEffect(() => {
+    getOfficialFirmwareVersions().then((versions) =>
+      setOfficialFirmwareVersions(versions),
+    );
+
+    getCommunityFirmwareRemoteData().then(setCommunityFirmwareVersions);
+  }, []);
 
   return (
     <Flex direction="column" gap="20px">
@@ -385,6 +406,86 @@ export default function Debug() {
           >
             Identify firmware in both partitions
           </Button>
+        </Stack>
+      </Stack>
+      <Separator />
+      <Stack gap={3} as="section">
+        <div>
+          <Heading size="xl">Overwrite current partition (Advanced)</Heading>
+          <Stack gap={1} color="grey" textStyle="sm">
+            <p>
+              These are advanced flashing options for users who want to flash
+              firmware directly to the currently selected partition, as opposed
+              to the backup partition.
+            </p>
+            <p>
+              <b>Flash to current partition</b> will download the firmware and
+              overwrite your current running firmware. The device will reboot
+              with the new firmware on the same partition.
+            </p>
+          </Stack>
+          <Alert.Root status="warning" marginTop={3}>
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Title>
+                Warning: Current firmware will be overwritten
+              </Alert.Title>
+              <Alert.Description>
+                Flashing to the current partition will overwrite the the backup
+                partition unchanged. Proceed with caution.
+              </Alert.Description>
+            </Alert.Content>
+          </Alert.Root>
+        </div>
+        <Stack as="section">
+          <Stack direction="column" gap={2}>
+            <Button
+              variant="subtle"
+              flexGrow={1}
+              onClick={actions.flashEnglishFirmware}
+              disabled={isRunning || !officialFirmwareVersions}
+              loading={!officialFirmwareVersions}
+            >
+              Flash English firmware ({officialFirmwareVersions?.en ?? '...'})
+              to current
+            </Button>
+            <Button
+              variant="subtle"
+              onClick={actions.flashChineseFirmware}
+              disabled={isRunning || !officialFirmwareVersions}
+              loading={!officialFirmwareVersions}
+            >
+              Flash Chinese firmware ({officialFirmwareVersions?.ch ?? '...'})
+              to current
+            </Button>
+            <Button
+              variant="subtle"
+              onClick={actions.flashCrossPointFirmware}
+              disabled={isRunning || !communityFirmwareVersions}
+              loading={!communityFirmwareVersions}
+            >
+              Flash CrossPoint firmware (
+              {communityFirmwareVersions?.crossPoint.version}) -{' '}
+              {communityFirmwareVersions?.crossPoint.releaseDate} to current
+            </Button>
+          </Stack>
+          <Stack direction="row" gap={2}>
+            <Flex grow={1}>
+              <FileUpload ref={appPartitionFileInput} />
+            </Flex>
+            <Button
+              variant="subtle"
+              flexGrow={1}
+              onClick={() =>
+                actions.flashCustomFirmware(() =>
+                  appPartitionFileInput.current?.getFile(),
+                )
+              }
+              disabled={isRunning}
+            >
+              Flash file to current
+            </Button>
+          </Stack>
         </Stack>
       </Stack>
       <Separator />
