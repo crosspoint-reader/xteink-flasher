@@ -2,6 +2,8 @@
 
 import { getCache } from '@vercel/functions';
 
+type DeviceModel = 'x4' | 'x3';
+
 interface OfficialFirmwareData {
   change_log: string;
   download_url: string;
@@ -21,7 +23,7 @@ interface CommunityFirmwareVersions {
   };
 }
 
-const firmwareVersionFallback: OfficialFirmwareVersions = {
+const x4FirmwareVersionFallback: OfficialFirmwareVersions = {
   en: {
     change_log:
       '1. Optimize EPUB/TXT  \r\n2. Optimize JPG speed  \r\n3. Optimize Wi-Fi connection  \r\n4. Optimize EPUB covers',
@@ -38,23 +40,70 @@ const firmwareVersionFallback: OfficialFirmwareVersions = {
   },
 };
 
-const chineseFirmwareCheckUrl =
-  'http://47.122.74.33:5000/api/check-update?current_version=V3.0.1&device_type=ESP32C3';
-const englishFirmwareCheckUrl =
-  'http://gotaserver.xteink.com/api/check-update?current_version=V3.0.1&device_type=ESP32C3&device_id=1234';
+const x3FirmwareVersionFallback: OfficialFirmwareVersions = {
+  en: {
+    change_log:
+      '1. Optimize EPUB\r\n2. Fix a large number of bugs\r\n3. The index needs to be rebuilt manually',
+    download_url:
+      'http://8.216.34.42:5001/api/v1/download/ESP32C3_X3/V5.1.6/V5.1.6-X3-EN-PROD-0304_.bin?choose=1&lang=en',
+    version: 'V5.1.6',
+  },
+  ch: {
+    change_log: '',
+    download_url:
+      'https://domestic-upload-file-api.oss-cn-hangzhou.aliyuncs.com/admin_uploads/firmware/202603/26/751e134f-22b1-4a00-bbfa-0942593ef867/V5.2.13-X3-CH-PROD-0326_173844.bin',
+    version: 'V5.2.13',
+  },
+};
 
-export async function getOfficialFirmwareRemoteData(): Promise<OfficialFirmwareVersions> {
+const x4ChineseFirmwareCheckUrl =
+  'https://api-prod.xteink.cn/api/v1/check-update?current_version=V5.1.0&device_type=ESP32C3&device_id=12345&lng=en';
+const x4EnglishFirmwareCheckUrl =
+  'https://api-prod.xteink.cc/api/v1/check-update?current_version=V5.1.0&device_type=ESP32C3&device_id=12345&lng=en';
+const x3ChineseFirmwareCheckUrl =
+  'https://api-prod.xteink.cn/api/v1/check-update?current_version=V5.1.0&device_type=ESP32C3_X3&device_id=12345&lng=en';
+const x3EnglishFirmwareCheckUrl =
+  'https://api-prod.xteink.cc/api/v1/check-update?current_version=V5.1.0&device_type=ESP32C3_X3&device_id=12345&lng=en';
+
+export async function getOfficialFirmwareRemoteData(
+  deviceModel: DeviceModel,
+): Promise<OfficialFirmwareVersions> {
   const cache = getCache();
-  const cacheKey = 'firmware-versions.official.v1';
+  const cacheKey = `firmware-versions.official.${deviceModel}.v1`;
+  const fallback =
+    deviceModel === 'x3'
+      ? x3FirmwareVersionFallback
+      : x4FirmwareVersionFallback;
 
   const value = (await cache.get(cacheKey)) as OfficialFirmwareVersions | null;
   if (value) {
     return value;
   }
 
+  if (deviceModel === 'x3') {
+    return Promise.all([
+      fetch(x3ChineseFirmwareCheckUrl),
+      fetch(x3EnglishFirmwareCheckUrl),
+    ])
+      .then(([chRes, enRes]) => Promise.all([chRes.json(), enRes.json()]))
+      .then(async ([chData, enData]) => {
+        const data: OfficialFirmwareVersions = {
+          en: enData.data,
+          ch: chData.data,
+        };
+
+        await cache.set(cacheKey, data, {
+          ttl: 60 * 60 * 24, // 24 hours
+        });
+
+        return data;
+      })
+      .catch(() => fallback);
+  }
+
   return Promise.all([
-    fetch(chineseFirmwareCheckUrl),
-    fetch(englishFirmwareCheckUrl),
+    fetch(x4ChineseFirmwareCheckUrl),
+    fetch(x4EnglishFirmwareCheckUrl),
   ])
     .then(([chRes, enRes]) => Promise.all([chRes.json(), enRes.json()]))
     .then(async ([chData, enData]) => {
@@ -69,11 +118,11 @@ export async function getOfficialFirmwareRemoteData(): Promise<OfficialFirmwareV
 
       return data;
     })
-    .catch(() => firmwareVersionFallback);
+    .catch(() => fallback);
 }
 
-export async function getOfficialFirmwareVersions() {
-  const data = await getOfficialFirmwareRemoteData();
+export async function getOfficialFirmwareVersions(deviceModel: DeviceModel) {
+  const data = await getOfficialFirmwareRemoteData(deviceModel);
 
   return {
     en: data.en.version,
@@ -91,7 +140,7 @@ export async function getCommunityFirmwareRemoteData(): Promise<CommunityFirmwar
   }
 
   const releaseData = await fetch(
-    'https://api.github.com/repos/daveallie/crosspoint-reader/releases/latest',
+    'https://api.github.com/repos/crosspoint-reader/crosspoint-reader/releases/latest',
   ).then((resp) => resp.json());
 
   const firmwareAsset = releaseData.assets.find((asset: any) =>
@@ -118,8 +167,11 @@ export async function getCommunityFirmwareRemoteData(): Promise<CommunityFirmwar
   return data;
 }
 
-export async function getOfficialFirmware(region: 'en' | 'ch') {
-  const url = await getOfficialFirmwareRemoteData().then(
+export async function getOfficialFirmware(
+  region: 'en' | 'ch',
+  deviceModel: DeviceModel,
+) {
+  const url = await getOfficialFirmwareRemoteData(deviceModel).then(
     (data) => data[region].download_url,
   );
   const response = await fetch(url);

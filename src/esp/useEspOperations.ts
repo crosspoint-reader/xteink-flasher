@@ -14,21 +14,91 @@ import {
 } from '@/utils/firmwareIdentifier';
 import OtaPartition, { OtaPartitionDetails } from './OtaPartition';
 import useStepRunner from './useStepRunner';
-import EspController from './EspController';
+import EspController, {
+  X3_PARTITION_LAYOUT,
+  X4_PARTITION_LAYOUT,
+} from './EspController';
 
-const expectedPartitionTable = [
-  { type: 'data-nvs', offset: 36864, size: 20480 },
-  { type: 'data-ota', offset: 57344, size: 8192 },
-  { type: 'app-ota_0', offset: 65536, size: 6553600 },
-  { type: 'app-ota_1', offset: 6619136, size: 6553600 },
-  { type: 'data-spiffs', offset: 13172736, size: 3538944 },
-  { type: 'data-coredump', offset: 16711680, size: 65536 },
+const x4PartitionTable = [
+  { type: 'data-nvs', offset: 0x9000, size: 0x5000 },
+  { type: 'data-ota', offset: 0xe000, size: 0x2000 },
+  { type: 'app-ota_0', offset: 0x10000, size: 0x640000 },
+  { type: 'app-ota_1', offset: 0x650000, size: 0x640000 },
+  { type: 'data-spiffs', offset: 0xc90000, size: 0x360000 },
+  { type: 'data-coredump', offset: 0xff0000, size: 0x10000 },
 ];
+
+const x3PartitionTable = [
+  { type: 'data-nvs', offset: 0x9000, size: 0x5000 },
+  { type: 'data-ota', offset: 0xe000, size: 0x2000 },
+  { type: 'app-ota_0', offset: 0x10000, size: 0x770000 },
+  { type: 'app-ota_1', offset: 0x780000, size: 0x770000 },
+  { type: 'data-spiffs', offset: 0xef0000, size: 0x100000 },
+  { type: 'data-coredump', offset: 0xff0000, size: 0x10000 },
+];
+
+interface PartitionEntry {
+  type: string;
+  offset: number;
+  size: number;
+}
+
+function matchesPartitionTable(
+  actual: PartitionEntry[],
+  expected: PartitionEntry[],
+) {
+  return (
+    actual.length === expected.length &&
+    expected.every(
+      (exp, i) =>
+        actual[i]!.type === exp.type &&
+        actual[i]!.offset === exp.offset &&
+        actual[i]!.size === exp.size,
+    )
+  );
+}
+
+export type DeviceModel = 'x4' | 'x3';
 
 export function useEspOperations() {
   const { stepData, initializeSteps, updateStepData, runStep } =
     useStepRunner();
   const [isRunning, setIsRunning] = useState(false);
+  const [deviceModel, setDeviceModel] = useState<DeviceModel>('x4');
+
+  const resetStepName = 'Reset device';
+  const softResetStepName = 'Disconnect (unplug and replug USB to restart)';
+
+  const validateAndDetectPartitionLayout = async (
+    espController: EspController,
+  ) => {
+    const partitionTable = await espController.readPartitionTable();
+
+    const validTables =
+      deviceModel === 'x3'
+        ? [x3PartitionTable, x4PartitionTable]
+        : [x4PartitionTable];
+
+    const matched = validTables.find((t) =>
+      matchesPartitionTable(partitionTable, t),
+    );
+
+    if (!matched) {
+      throw new Error(
+        `Unexpected partition configuration for ${deviceModel.toUpperCase()}. Make sure you've selected the correct device model.\nGot ${JSON.stringify(
+          partitionTable,
+          null,
+          2,
+        )}`,
+      );
+    }
+
+    espController.setPartitionLayout(
+      matchesPartitionTable(partitionTable, x3PartitionTable)
+        ? X3_PARTITION_LAYOUT
+        : X4_PARTITION_LAYOUT,
+    );
+  };
 
   const wrapWithRunning =
     <Args extends unknown[], T>(fn: (...a: Args) => Promise<T>) =>
@@ -39,7 +109,9 @@ export function useEspOperations() {
 
   const flashRemoteFirmware = async (
     getFirmware: () => Promise<Uint8Array>,
+    { skipReset = false }: { skipReset?: boolean } = {},
   ) => {
+    const stepName = skipReset ? softResetStepName : resetStepName;
     initializeSteps([
       'Connect to device',
       'Validate partition table',
@@ -47,35 +119,20 @@ export function useEspOperations() {
       'Read otadata partition',
       'Flash app partition',
       'Flash otadata partition',
-      'Reset device',
+      stepName,
     ]);
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
 
-    await runStep('Validate partition table', async () => {
-      const partitionTable = await espController.readPartitionTable();
-      if (
-        partitionTable.length !== expectedPartitionTable.length ||
-        expectedPartitionTable.some(
-          (expected, index) =>
-            partitionTable[index]!.type !== expected.type ||
-            partitionTable[index]!.offset !== expected.offset ||
-            partitionTable[index]!.size !== expected.size,
-        )
-      ) {
-        throw new Error(
-          `Unexpected partition configuration. You can only use OTA fast flash controls on devices running CrossPoint or official firmware with the default partition table.\nGot ${JSON.stringify(
-            partitionTable,
-            null,
-            2,
-          )}`,
-        );
-      }
-    });
+    await runStep('Validate partition table', () =>
+      validateAndDetectPartitionLayout(espController),
+    );
 
     const firmwareFile = await runStep('Download firmware', getFirmware);
 
@@ -117,15 +174,17 @@ export function useEspOperations() {
       );
     });
 
-    await runStep('Reset device', () => espController.disconnect());
+    await runStep(stepName, () => espController.disconnect({ skipReset }));
   };
 
   const flashEnglishFirmware = async () =>
-    flashRemoteFirmware(() => getOfficialFirmware('en'));
+    flashRemoteFirmware(() => getOfficialFirmware('en', deviceModel));
   const flashChineseFirmware = async () =>
-    flashRemoteFirmware(() => getOfficialFirmware('ch'));
+    flashRemoteFirmware(() => getOfficialFirmware('ch', deviceModel));
   const flashCrossPointFirmware = async () =>
-    flashRemoteFirmware(() => getCommunityFirmware('CrossPoint'));
+    flashRemoteFirmware(() => getCommunityFirmware('CrossPoint'), {
+      skipReset: deviceModel === 'x3',
+    });
 
   const flashCustomFirmware = async (getFile: () => File | undefined) => {
     initializeSteps([
@@ -135,7 +194,7 @@ export function useEspOperations() {
       'Read otadata partition',
       'Flash app partition',
       'Flash otadata partition',
-      'Reset device',
+      resetStepName,
     ]);
 
     const fileData = await runStep('Read file', async () => {
@@ -147,31 +206,16 @@ export function useEspOperations() {
     });
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
 
-    await runStep('Validate partition table', async () => {
-      const partitionTable = await espController.readPartitionTable();
-      if (
-        partitionTable.length !== expectedPartitionTable.length ||
-        expectedPartitionTable.some(
-          (expected, index) =>
-            partitionTable[index]!.type !== expected.type ||
-            partitionTable[index]!.offset !== expected.offset ||
-            partitionTable[index]!.size !== expected.size,
-        )
-      ) {
-        throw new Error(
-          `Unexpected partition configuration. You can only use OTA fast flash controls on devices running CrossPoint or official firmware with the default partition table.\nGot ${JSON.stringify(
-            partitionTable,
-            null,
-            2,
-          )}`,
-        );
-      }
-    });
+    await runStep('Validate partition table', () =>
+      validateAndDetectPartitionLayout(espController),
+    );
 
     const [otaPartition, backupPartitionLabel] = await runStep(
       'Read otadata partition',
@@ -211,7 +255,7 @@ export function useEspOperations() {
       );
     });
 
-    await runStep('Reset device', () => espController.disconnect());
+    await runStep(resetStepName, () => espController.disconnect());
   };
 
   const saveFullFlash = async () => {
@@ -222,7 +266,9 @@ export function useEspOperations() {
     ]);
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
@@ -248,7 +294,7 @@ export function useEspOperations() {
       'Read file',
       'Connect to device',
       'Write flash',
-      'Reset device',
+      resetStepName,
     ]);
 
     const fileData = await runStep('Read file', async () => {
@@ -260,7 +306,9 @@ export function useEspOperations() {
     });
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
@@ -271,7 +319,7 @@ export function useEspOperations() {
       ),
     );
 
-    await runStep('Reset device', () => espController.disconnect());
+    await runStep(resetStepName, () => espController.disconnect());
   };
 
   const readDebugOtadata = async () => {
@@ -282,7 +330,9 @@ export function useEspOperations() {
     ]);
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
@@ -305,15 +355,22 @@ export function useEspOperations() {
   const readAppPartition = async (partitionLabel: 'app0' | 'app1') => {
     initializeSteps([
       'Connect to device',
+      'Validate partition table',
       `Read app partition (${partitionLabel})`,
       'Disconnect from device',
     ]);
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
+
+    await runStep('Validate partition table', () =>
+      validateAndDetectPartitionLayout(espController),
+    );
 
     const data = await runStep(`Read app partition (${partitionLabel})`, () =>
       espController.readAppPartition(partitionLabel, (_, p, t) =>
@@ -335,11 +392,13 @@ export function useEspOperations() {
       'Connect to device',
       'Read otadata partition',
       'Flash otadata partition',
-      'Reset device',
+      resetStepName,
     ]);
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
@@ -368,7 +427,7 @@ export function useEspOperations() {
       ),
     );
 
-    await runStep('Reset device', () => espController.disconnect());
+    await runStep(resetStepName, () => espController.disconnect());
 
     return otaPartition;
   };
@@ -378,7 +437,7 @@ export function useEspOperations() {
       'Read file',
       'Connect to device',
       'Write flash',
-      'Reset device',
+      resetStepName,
     ]);
 
     await runStep(
@@ -424,7 +483,7 @@ export function useEspOperations() {
     );
 
     await runStep(
-      'Reset device',
+      resetStepName,
       () =>
         new Promise((resolve) => {
           setTimeout(resolve, 500);
@@ -439,6 +498,7 @@ export function useEspOperations() {
   }> => {
     initializeSteps([
       'Connect to device',
+      'Validate partition table',
       'Read otadata partition',
       'Read app0 partition',
       'Read app1 partition',
@@ -447,10 +507,16 @@ export function useEspOperations() {
     ]);
 
     const espController = await runStep('Connect to device', async () => {
-      const c = await EspController.fromRequestedDevice();
+      const c = await EspController.fromRequestedDevice(
+        deviceModel === 'x3' ? X3_PARTITION_LAYOUT : X4_PARTITION_LAYOUT,
+      );
       await c.connect();
       return c;
     });
+
+    await runStep('Validate partition table', () =>
+      validateAndDetectPartitionLayout(espController),
+    );
 
     const otaPartition = await runStep('Read otadata partition', () =>
       espController.readOtadataPartition((_, p, t) =>
@@ -530,6 +596,8 @@ export function useEspOperations() {
   return {
     stepData,
     isRunning,
+    deviceModel,
+    setDeviceModel,
     actions: {
       flashEnglishFirmware: wrapWithRunning(flashEnglishFirmware),
       flashChineseFirmware: wrapWithRunning(flashChineseFirmware),

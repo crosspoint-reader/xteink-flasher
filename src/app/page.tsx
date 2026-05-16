@@ -10,6 +10,7 @@ import {
   Alert,
   Stack,
   Flex,
+  HStack,
 } from '@chakra-ui/react';
 import FileUpload, { FileUploadHandle } from '@/components/FileUpload';
 import Steps from '@/components/Steps';
@@ -20,7 +21,8 @@ import {
 } from '@/remote/firmwareFetcher';
 
 export default function Home() {
-  const { actions, stepData, isRunning } = useEspOperations();
+  const { actions, stepData, isRunning, deviceModel, setDeviceModel } =
+    useEspOperations();
   const [officialFirmwareVersions, setOfficialFirmwareVersions] = useState<{
     en: string;
     ch: string;
@@ -32,15 +34,42 @@ export default function Home() {
   const appPartitionFileInput = useRef<FileUploadHandle>(null);
 
   useEffect(() => {
-    getOfficialFirmwareVersions().then((versions) =>
-      setOfficialFirmwareVersions(versions),
-    );
+    let cancelled = false;
+    setOfficialFirmwareVersions(null);
+    getOfficialFirmwareVersions(deviceModel).then((versions) => {
+      if (!cancelled) {
+        setOfficialFirmwareVersions(versions);
+      }
+    });
 
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceModel]);
+
+  useEffect(() => {
     getCommunityFirmwareRemoteData().then(setCommunityFirmwareVersions);
   }, []);
 
   return (
     <Flex direction="column" gap="20px">
+      <Stack gap={3} as="section">
+        <Heading size="xl">Device model</Heading>
+        <HStack gap={3}>
+          {(['x4', 'x3'] as const).map((model) => (
+            <Button
+              key={model}
+              variant={deviceModel === model ? 'solid' : 'outline'}
+              aria-pressed={deviceModel === model}
+              onClick={() => setDeviceModel(model)}
+              disabled={isRunning}
+            >
+              Xteink {model.toUpperCase()}
+            </Button>
+          ))}
+        </HStack>
+      </Stack>
+      <Separator />
       <Alert.Root status="warning">
         <Alert.Indicator />
         <Alert.Content>
@@ -136,7 +165,8 @@ export default function Home() {
             disabled={isRunning || !officialFirmwareVersions}
             loading={!officialFirmwareVersions}
           >
-            Flash English firmware ({officialFirmwareVersions?.en ?? '...'})
+            Flash English firmware for {deviceModel.toUpperCase()} (
+            {officialFirmwareVersions?.en ?? '...'})
           </Button>
           <Button
             variant="subtle"
@@ -144,7 +174,8 @@ export default function Home() {
             disabled={isRunning || !officialFirmwareVersions}
             loading={!officialFirmwareVersions}
           >
-            Flash Chinese firmware ({officialFirmwareVersions?.ch ?? '...'})
+            Flash Chinese firmware for {deviceModel.toUpperCase()} (
+            {officialFirmwareVersions?.ch ?? '...'})
           </Button>
           <Button
             variant="subtle"
@@ -152,7 +183,7 @@ export default function Home() {
             disabled={isRunning || !communityFirmwareVersions}
             loading={!communityFirmwareVersions}
           >
-            Flash CrossPoint firmware (
+            Flash CrossPoint firmware for {deviceModel.toUpperCase()} (
             {communityFirmwareVersions?.crossPoint.version}) -{' '}
             {communityFirmwareVersions?.crossPoint.releaseDate}
           </Button>
@@ -170,7 +201,7 @@ export default function Home() {
               }
               disabled={isRunning}
             >
-              Flash firmware from file
+              Flash firmware from file for {deviceModel.toUpperCase()}
             </Button>
           </Stack>
           {process.env.NODE_ENV === 'development' && (
@@ -208,10 +239,10 @@ export default function Home() {
           <Alert.Title>Change device language</Alert.Title>
           <Alert.Description>
             Before starting the process, it is recommended to change the device
-            language to English. To do this, select “Settings” icon, then click
-            “OK / Confirm” button and “OK / Confirm” again until English is
-            shown. Otherwise, the language will still be Chinese after flashing
-            and you may not notice changes.
+            language to English. To do this, select &ldquo;Settings&rdquo; icon,
+            then click &ldquo;OK / Confirm&rdquo; button and &ldquo;OK /
+            Confirm&rdquo; again until English is shown. Otherwise, the language
+            will still be Chinese after flashing and you may not notice changes.
           </Alert.Description>
         </Alert.Content>
       </Alert.Root>
@@ -220,10 +251,21 @@ export default function Home() {
         <Alert.Content>
           <Alert.Title>Device restart instructions</Alert.Title>
           <Alert.Description>
-            Once you complete a write operation, you will need to restart your
-            device by pressing and releasing the small “Reset” button near the
-            bottom right, followed quickly by pressing and holding of the main
-            power button for about 3 seconds.
+            <Stack>
+              <p>
+                Once you complete a write operation, you will need to restart
+                your device by pressing and releasing the small
+                &ldquo;Reset&rdquo; button near the bottom right, followed
+                quickly by pressing and holding of the main power button for
+                about 3 seconds.
+              </p>
+              {deviceModel === 'x3' && (
+                <p>
+                  For CrossPoint firmware, disconnect the USB cable and connect
+                  it again instead.
+                </p>
+              )}
+            </Stack>
           </Alert.Description>
         </Alert.Content>
       </Alert.Root>

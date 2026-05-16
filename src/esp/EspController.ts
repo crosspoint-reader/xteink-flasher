@@ -41,6 +41,24 @@ const PARTITION_TYPES: Record<number, Record<number, string>> = {
   },
 };
 
+export interface PartitionLayout {
+  app0Offset: number;
+  app1Offset: number;
+  appSize: number;
+}
+
+export const X4_PARTITION_LAYOUT: PartitionLayout = {
+  app0Offset: 0x10000,
+  app1Offset: 0x650000,
+  appSize: 0x640000,
+};
+
+export const X3_PARTITION_LAYOUT: PartitionLayout = {
+  app0Offset: 0x10000,
+  app1Offset: 0x780000,
+  appSize: 0x770000,
+};
+
 export default class EspController {
   static async requestDevice() {
     if (!('serial' in navigator && navigator.serial)) {
@@ -54,15 +72,23 @@ export default class EspController {
     });
   }
 
-  static async fromRequestedDevice() {
+  static async fromRequestedDevice(
+    partitionLayout: PartitionLayout = X4_PARTITION_LAYOUT,
+  ) {
     const device = await this.requestDevice();
-    return new EspController(device);
+    return new EspController(device, partitionLayout);
   }
 
   private espLoader;
 
-  constructor(device: SerialPort) {
+  private layout: PartitionLayout;
+
+  constructor(
+    device: SerialPort,
+    partitionLayout: PartitionLayout = X4_PARTITION_LAYOUT,
+  ) {
     const transport = new Transport(device, false);
+    this.layout = partitionLayout;
     this.espLoader = new ESPLoader({
       transport,
       baudrate: 115200,
@@ -71,12 +97,16 @@ export default class EspController {
     });
   }
 
+  setPartitionLayout(layout: PartitionLayout) {
+    this.layout = layout;
+  }
+
   async connect() {
     await this.espLoader.main();
   }
 
   async disconnect({ skipReset = false }: { skipReset?: boolean } = {}) {
-    await this.espLoader.after(skipReset ? 'no_reset' : 'hard_reset');
+    await this.espLoader.after(skipReset ? 'no_reset_stub' : 'hard_reset');
     await this.espLoader.transport.disconnect();
   }
 
@@ -180,8 +210,15 @@ export default class EspController {
       totalSize: number,
     ) => void,
   ) {
-    const offset = partitionLabel === 'app0' ? 0x10000 : 0x650000;
-    return this.espLoader.readFlash(offset, 0x640000, onPacketReceived);
+    const offset =
+      partitionLabel === 'app0'
+        ? this.layout.app0Offset
+        : this.layout.app1Offset;
+    return this.espLoader.readFlash(
+      offset,
+      this.layout.appSize,
+      onPacketReceived,
+    );
   }
 
   async readAppPartitionForIdentification(
@@ -206,7 +243,10 @@ export default class EspController {
     // In testing, most firmwares are identified within the first 25KB read, so reading the entire
     // partition is unnecessary in the majority of cases.
 
-    const baseOffset = partitionLabel === 'app0' ? 0x10000 : 0x650000;
+    const baseOffset =
+      partitionLabel === 'app0'
+        ? this.layout.app0Offset
+        : this.layout.app1Offset;
 
     return this.espLoader.readFlash(
       baseOffset + offset,
@@ -224,8 +264,10 @@ export default class EspController {
       total: number,
     ) => void,
   ) {
-    if (data.length > 0x640000) {
-      throw new Error(`Data cannot be larger than 0x640000`);
+    if (data.length > this.layout.appSize) {
+      throw new Error(
+        `Data cannot be larger than 0x${this.layout.appSize.toString(16)}`,
+      );
     }
     if (data.length < 0xf0000) {
       throw new Error(
@@ -233,7 +275,10 @@ export default class EspController {
       );
     }
 
-    const offset = partitionLabel === 'app0' ? 0x10000 : 0x650000;
+    const offset =
+      partitionLabel === 'app0'
+        ? this.layout.app0Offset
+        : this.layout.app1Offset;
 
     await this.writeData(data, offset, reportProgress);
   }
