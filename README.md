@@ -1,3 +1,8 @@
+>[!NOTE] 
+> This repo has been archived as https://xteink.dve.al/ will start redirecting to https://crosspointreader.com/
+
+---
+
 # Xteink Flasher
 
 Web based tool to help flash the Xteink device.
